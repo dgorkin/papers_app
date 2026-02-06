@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      width: 340px;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      padding: 16px;
+    }
+    h1 {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: #89b4fa;
+    }
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      font-size: 12px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot.green { background: #a6e3a1; }
+    .dot.red { background: #f38ba8; }
+    .dot.yellow { background: #f9e2af; }
+
+    .info {
+      background: #313244;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .info .label {
+      color: #a6adc8;
+      font-size: 11px;
+    }
+    .info .value {
+      color: #cdd6f4;
+      word-break: break-all;
+    }
+
+    button {
+      width: 100%;
+      padding: 10px;
+      background: #89b4fa;
+      color: #1e1e2e;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button:hover {
+      background: #74c7ec;
+    }
+    button:disabled {
+      background: #45475a;
+      color: #6c7086;
+      cursor: not-allowed;
+    }
+
+    .message {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      display: none;
+    }
+    .message.success {
+      background: rgba(166, 227, 161, 0.15);
+      color: #a6e3a1;
+      display: block;
+    }
+    .message.error {
+      background: rgba(243, 139, 168, 0.15);
+      color: #f38ba8;
+      display: block;
+    }
+    .message.info {
+      background: rgba(137, 180, 250, 0.15);
+      color: #89b4fa;
+      display: block;
+    }
+
+    .settings {
+      margin-top: 12px;
+      border-top: 1px solid #313244;
+      padding-top: 10px;
+    }
+    .settings label {
+      font-size: 11px;
+      color: #a6adc8;
+    }
+    .settings input {
+      width: 80px;
+      background: #313244;
+      border: 1px solid #45475a;
+      border-radius: 4px;
+      color: #cdd6f4;
+      padding: 4px 8px;
+      font-size: 12px;
+      margin-left: 6px;
+    }
+    .queue-count {
+      font-size: 11px;
+      color: #a6adc8;
+      margin-top: 6px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Literature Manager</h1>
+
+  <div class="status-row" id="appStatus">
+    <span class="dot yellow"></span>
+    <span>Checking app status...</span>
+  </div>
+
+  <div class="info" id="paperInfo" style="display: none;">
+    <div class="label">Detected:</div>
+    <div class="value" id="paperDetail"></div>
+  </div>
+
+  <button id="addBtn" disabled>Add to Library</button>
+
+  <div class="message" id="message"></div>
+
+  <div class="queue-count" id="queueInfo"></div>
+
+  <div class="settings">
+    <label>API Port:
+      <input type="number" id="portInput" value="52525" min="1024" max="65535" />
+    </label>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
