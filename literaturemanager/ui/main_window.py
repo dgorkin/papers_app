@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QProgressDialog,
+    QPushButton,
     QSplitter,
     QStatusBar,
     QToolBar,
