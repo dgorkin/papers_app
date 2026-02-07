@@ -1,11 +1,12 @@
 """Tests for the import service."""
 
 import os
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from literaturemanager.models.database import Database
+from literaturemanager.models.json_store import JsonStore
 from literaturemanager.models.paper_repository import Paper, PaperRepository
 from literaturemanager.services.import_service import ImportService
 from literaturemanager.services.metadata import PaperMetadata
@@ -13,16 +14,15 @@ from literaturemanager.services.metadata import PaperMetadata
 
 class TestImportService(unittest.TestCase):
     def setUp(self):
-        self.tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self.tmpfile.close()
-        self.db = Database(self.tmpfile.name)
-        self.db.connect()
-        self.repo = PaperRepository(self.db)
+        self.tmpdir = tempfile.mkdtemp()
+        self.store = JsonStore(self.tmpdir)
+        self.store.connect()
+        self.repo = PaperRepository(self.store)
         self.service = ImportService(self.repo)
 
     def tearDown(self):
-        self.db.close()
-        os.unlink(self.tmpfile.name)
+        self.store.close()
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     @patch("literaturemanager.services.import_service.fetch_metadata_by_pmid")
     def test_import_by_pmid(self, mock_fetch):

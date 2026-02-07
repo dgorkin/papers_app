@@ -3,10 +3,10 @@
 import logging
 import sys
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from .api.server import ApiServer
-from .models.database import Database
+from .models.json_store import JsonStore, LockError
 from .services.config import Config
 from .services.import_service import ImportService
 from .models.paper_repository import PaperRepository
@@ -24,16 +24,27 @@ def main():
     app.setApplicationName("Literature Manager")
     app.setOrganizationName("LiteratureManager")
 
-    # Initialize config and database
+    # Initialize config
     config = Config()
-    db = Database()
-    db.connect()
+
+    # Initialize JSON store with lock file protection
+    library_dir = config.get_library_dir()
+    store = JsonStore(library_dir)
+    try:
+        store.connect()
+    except LockError as e:
+        QMessageBox.critical(
+            None,
+            "Library Locked",
+            str(e),
+        )
+        sys.exit(1)
 
     # Create main window
-    window = MainWindow(db, config)
+    window = MainWindow(store, config)
 
     # Set up the API server callback
-    import_service = ImportService(PaperRepository(db))
+    import_service = ImportService(PaperRepository(store))
 
     def api_add_callback(data: dict) -> dict:
         pmid = data.get("pmid")
@@ -86,7 +97,7 @@ def main():
     # Cleanup
     if api_server:
         api_server.stop()
-    db.close()
+    store.close()
     sys.exit(exit_code)
 
 

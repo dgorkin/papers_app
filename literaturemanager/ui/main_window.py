@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
 )
 
-from ..models.database import Database
+from ..models.json_store import JsonStore
 from ..models.paper_repository import (
     Paper,
     PaperRepository,
@@ -79,13 +79,13 @@ class MainWindow(QMainWindow):
 
     paper_added_externally = pyqtSignal(dict)
 
-    def __init__(self, db: Database, config: Config, parent=None):
+    def __init__(self, store: JsonStore, config: Config, parent=None):
         super().__init__(parent)
-        self.db = db
+        self.store = store
         self.config = config
-        self.paper_repo = PaperRepository(db)
-        self.tag_repo = TagRepository(db)
-        self.status_repo = StatusRepository(db)
+        self.paper_repo = PaperRepository(store)
+        self.tag_repo = TagRepository(store)
+        self.status_repo = StatusRepository(store)
         self.import_service = ImportService(self.paper_repo)
 
         self.setWindowTitle("Literature Manager")

@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
     QColorDialog,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QInputDialog,
@@ -288,7 +289,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.config = config
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(500)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -296,6 +297,18 @@ class SettingsDialog(QDialog):
 
         form = QFormLayout()
 
+        # Library directory
+        lib_row = QHBoxLayout()
+        self.lib_dir_edit = QLineEdit()
+        self.lib_dir_edit.setText(self.config.get_library_dir())
+        self.lib_dir_edit.setPlaceholderText("Default (OneDrive or local app data)")
+        lib_row.addWidget(self.lib_dir_edit, 1)
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self._browse_library_dir)
+        lib_row.addWidget(browse_btn)
+        form.addRow("Library Folder:", lib_row)
+
+        # API port
         self.port_spin = QSpinBox()
         self.port_spin.setRange(1024, 65535)
         self.port_spin.setValue(self.config.get("api_port", 52525))
@@ -304,7 +317,10 @@ class SettingsDialog(QDialog):
         layout.addLayout(form)
 
         note = QLabel(
-            "Note: Changes to the API port require restarting the application."
+            "The library folder stores your papers database (library.json). "
+            "Set this to a OneDrive or cloud-synced folder to access your "
+            "library across machines.\n\n"
+            "Note: Changes require restarting the application."
         )
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -316,6 +332,14 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _browse_library_dir(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Library Folder", self.lib_dir_edit.text()
+        )
+        if folder:
+            self.lib_dir_edit.setText(folder)
+
     def _save(self):
+        self.config.set("library_dir", self.lib_dir_edit.text().strip())
         self.config.set("api_port", self.port_spin.value())
         self.accept()

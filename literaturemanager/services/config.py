@@ -4,6 +4,8 @@ import json
 import os
 from typing import Any
 
+from ..models.json_store import get_default_library_dir
+
 
 def get_config_path() -> str:
     if os.name == "nt":
@@ -21,6 +23,7 @@ DEFAULTS = {
     "api_enabled": True,
     "window_width": 1200,
     "window_height": 800,
+    "library_dir": "",
 }
 
 
@@ -52,3 +55,10 @@ class Config:
     def set(self, key: str, value):
         self._data[key] = value
         self.save()
+
+    def get_library_dir(self) -> str:
+        """Return the configured library directory, or the default."""
+        configured = self._data.get("library_dir", "")
+        if configured:
+            return configured
+        return get_default_library_dir()

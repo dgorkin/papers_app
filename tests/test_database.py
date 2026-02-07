@@ -1,10 +1,12 @@
-"""Tests for the database layer."""
+"""Tests for the JSON store and repository layer."""
 
+import json
 import os
+import shutil
 import tempfile
 import unittest
 
-from literaturemanager.models.database import Database
+from literaturemanager.models.json_store import JsonStore, LockError
 from literaturemanager.models.paper_repository import (
     Paper,
     PaperRepository,
@@ -13,29 +15,22 @@ from literaturemanager.models.paper_repository import (
 )
 
 
-class TestDatabase(unittest.TestCase):
+class TestJsonStore(unittest.TestCase):
     def setUp(self):
-        self.tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self.tmpfile.close()
-        self.db = Database(self.tmpfile.name)
-        self.db.connect()
+        self.tmpdir = tempfile.mkdtemp()
+        self.store = JsonStore(self.tmpdir)
+        self.store.connect()
 
     def tearDown(self):
-        self.db.close()
-        os.unlink(self.tmpfile.name)
+        self.store.close()
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def test_tables_created(self):
-        tables = self.db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-        table_names = {r["name"] for r in tables}
-        self.assertIn("papers", table_names)
-        self.assertIn("tags", table_names)
-        self.assertIn("paper_tags", table_names)
-        self.assertIn("statuses", table_names)
+    def test_creates_library_file(self):
+        lib_path = os.path.join(self.tmpdir, "library.json")
+        self.assertTrue(os.path.exists(lib_path))
 
     def test_default_statuses(self):
-        repo = StatusRepository(self.db)
+        repo = StatusRepository(self.store)
         statuses = repo.get_all()
         names = [s.name for s in statuses]
         self.assertIn("In Queue", names)
@@ -43,18 +38,66 @@ class TestDatabase(unittest.TestCase):
         self.assertIn("Read", names)
         self.assertIn("Discard", names)
 
+    def test_json_schema(self):
+        lib_path = os.path.join(self.tmpdir, "library.json")
+        with open(lib_path, "r") as f:
+            data = json.load(f)
+        self.assertIn("papers", data)
+        self.assertIn("tags", data)
+        self.assertIn("statuses", data)
+        self.assertIn("last_modified", data)
+        self.assertIsInstance(data["papers"], list)
+        self.assertIsInstance(data["tags"], list)
+        self.assertIsInstance(data["statuses"], list)
+
+    def test_lock_file_created(self):
+        lock_path = os.path.join(self.tmpdir, "library.lock")
+        self.assertTrue(os.path.exists(lock_path))
+
+    def test_lock_file_removed_on_close(self):
+        lock_path = os.path.join(self.tmpdir, "library.lock")
+        self.store.close()
+        self.assertFalse(os.path.exists(lock_path))
+
+    def test_lock_prevents_second_instance(self):
+        store2 = JsonStore(self.tmpdir)
+        with self.assertRaises(LockError):
+            store2.connect()
+
+    def test_lock_error_contains_info(self):
+        store2 = JsonStore(self.tmpdir)
+        try:
+            store2.connect()
+            self.fail("Expected LockError")
+        except LockError as e:
+            self.assertIn("hostname", e.lock_info)
+            self.assertIn("pid", e.lock_info)
+            self.assertIn("locked_at", e.lock_info)
+
+    def test_data_persists_across_reopen(self):
+        repo = PaperRepository(self.store)
+        repo.add_paper(Paper(title="Persistent Paper"))
+        self.store.close()
+
+        store2 = JsonStore(self.tmpdir)
+        store2.connect()
+        repo2 = PaperRepository(store2)
+        papers = repo2.get_all_papers()
+        self.assertEqual(len(papers), 1)
+        self.assertEqual(papers[0].title, "Persistent Paper")
+        store2.close()
+
 
 class TestPaperRepository(unittest.TestCase):
     def setUp(self):
-        self.tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self.tmpfile.close()
-        self.db = Database(self.tmpfile.name)
-        self.db.connect()
-        self.repo = PaperRepository(self.db)
+        self.tmpdir = tempfile.mkdtemp()
+        self.store = JsonStore(self.tmpdir)
+        self.store.connect()
+        self.repo = PaperRepository(self.store)
 
     def tearDown(self):
-        self.db.close()
-        os.unlink(self.tmpfile.name)
+        self.store.close()
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_add_and_get_paper(self):
         paper = Paper(
@@ -112,7 +155,7 @@ class TestPaperRepository(unittest.TestCase):
             self.assertEqual(retrieved.priority, priority)
 
     def test_tags(self):
-        tag_repo = TagRepository(self.db)
+        tag_repo = TagRepository(self.store)
         tag_id = tag_repo.add("neuroscience", "#ff0000")
 
         paper = Paper(title="Tagged Paper")
@@ -131,18 +174,42 @@ class TestPaperRepository(unittest.TestCase):
         remaining = self.repo.get_all_papers()
         self.assertEqual(len(remaining), 2)
 
+    def test_status_resolved_on_paper(self):
+        status_repo = StatusRepository(self.store)
+        statuses = status_repo.get_all()
+        first_status = statuses[0]
+
+        paper = Paper(title="Status Paper", status_id=first_status.id)
+        pid = self.repo.add_paper(paper)
+        retrieved = self.repo.get_paper(pid)
+        self.assertEqual(retrieved.status_name, first_status.name)
+        self.assertEqual(retrieved.status_color, first_status.color)
+
+    def test_add_tag_to_paper(self):
+        tag_repo = TagRepository(self.store)
+        t1 = tag_repo.add("tag1")
+        t2 = tag_repo.add("tag2")
+
+        pid = self.repo.add_paper(Paper(title="Multi-tag"))
+        self.repo.add_tag_to_paper(pid, t1)
+        self.repo.add_tag_to_paper(pid, t2)
+        # Adding same tag again should not duplicate
+        self.repo.add_tag_to_paper(pid, t1)
+
+        tags = self.repo.get_paper_tags(pid)
+        self.assertEqual(len(tags), 2)
+
 
 class TestTagRepository(unittest.TestCase):
     def setUp(self):
-        self.tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self.tmpfile.close()
-        self.db = Database(self.tmpfile.name)
-        self.db.connect()
-        self.repo = TagRepository(self.db)
+        self.tmpdir = tempfile.mkdtemp()
+        self.store = JsonStore(self.tmpdir)
+        self.store.connect()
+        self.repo = TagRepository(self.store)
 
     def tearDown(self):
-        self.db.close()
-        os.unlink(self.tmpfile.name)
+        self.store.close()
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_add_and_get_tags(self):
         self.repo.add("epigenetics", "#00ff00")
@@ -165,18 +232,31 @@ class TestTagRepository(unittest.TestCase):
         self.repo.delete(tag_id)
         self.assertIsNone(self.repo.find_by_name("temp"))
 
+    def test_delete_tag_removes_from_papers(self):
+        paper_repo = PaperRepository(self.store)
+        tag_id = self.repo.add("removable")
+        pid = paper_repo.add_paper(Paper(title="Test"))
+        paper_repo.set_paper_tags(pid, [tag_id])
+        self.repo.delete(tag_id)
+        tags = paper_repo.get_paper_tags(pid)
+        self.assertEqual(len(tags), 0)
+
+    def test_duplicate_tag_name_raises(self):
+        self.repo.add("unique_tag")
+        with self.assertRaises(ValueError):
+            self.repo.add("unique_tag")
+
 
 class TestStatusRepository(unittest.TestCase):
     def setUp(self):
-        self.tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self.tmpfile.close()
-        self.db = Database(self.tmpfile.name)
-        self.db.connect()
-        self.repo = StatusRepository(self.db)
+        self.tmpdir = tempfile.mkdtemp()
+        self.store = JsonStore(self.tmpdir)
+        self.store.connect()
+        self.repo = StatusRepository(self.store)
 
     def tearDown(self):
-        self.db.close()
-        os.unlink(self.tmpfile.name)
+        self.store.close()
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_add_custom_status(self):
         initial_count = len(self.repo.get_all())
@@ -196,6 +276,14 @@ class TestStatusRepository(unittest.TestCase):
         initial = len(self.repo.get_all())
         self.repo.delete(sid)
         self.assertEqual(len(self.repo.get_all()), initial - 1)
+
+    def test_delete_status_clears_paper_reference(self):
+        paper_repo = PaperRepository(self.store)
+        sid = self.repo.add("Temporary")
+        pid = paper_repo.add_paper(Paper(title="Test", status_id=sid))
+        self.repo.delete(sid)
+        paper = paper_repo.get_paper(pid)
+        self.assertIsNone(paper.status_id)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
-"""Repository pattern for paper CRUD operations."""
+"""Repository pattern for paper CRUD operations using JSON store."""
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
-from .database import Database
+
+from .json_store import JsonStore
 
 
 @dataclass
@@ -44,253 +46,284 @@ class Status:
     sort_order: int = 0
 
 
-class PaperRepository:
-    """Handles all paper-related database operations."""
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-    def __init__(self, db: Database):
-        self.db = db
+
+class PaperRepository:
+    """Handles all paper-related operations against the JSON store."""
+
+    def __init__(self, store: JsonStore):
+        self.store = store
 
     def add_paper(self, paper: Paper) -> int:
         """Insert a new paper and return its ID."""
-        cursor = self.db.execute(
-            """INSERT INTO papers
-               (title, authors, year, journal, doi, pmid, abstract,
-                pdf_path, status_id, priority, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (paper.title, paper.authors, paper.year, paper.journal,
-             paper.doi, paper.pmid, paper.abstract, paper.pdf_path,
-             paper.status_id, paper.priority, paper.notes),
-        )
-        self.db.commit()
-        return cursor.lastrowid
+        now = _now()
+        paper_id = self.store.next_paper_id()
+        record = {
+            "id": paper_id,
+            "title": paper.title,
+            "authors": paper.authors,
+            "year": paper.year,
+            "journal": paper.journal,
+            "doi": paper.doi,
+            "pmid": paper.pmid,
+            "abstract": paper.abstract,
+            "pdf_path": paper.pdf_path,
+            "status_id": paper.status_id,
+            "priority": paper.priority,
+            "notes": paper.notes,
+            "date_added": now,
+            "date_modified": now,
+            "tag_ids": [],
+        }
+        self.store.papers.append(record)
+        self.store.save()
+        return paper_id
 
     def update_paper(self, paper: Paper):
         """Update an existing paper."""
-        self.db.execute(
-            """UPDATE papers SET
-               title=?, authors=?, year=?, journal=?, doi=?, pmid=?,
-               abstract=?, pdf_path=?, status_id=?, priority=?, notes=?,
-               date_modified=datetime('now')
-               WHERE id=?""",
-            (paper.title, paper.authors, paper.year, paper.journal,
-             paper.doi, paper.pmid, paper.abstract, paper.pdf_path,
-             paper.status_id, paper.priority, paper.notes, paper.id),
-        )
-        self.db.commit()
+        for rec in self.store.papers:
+            if rec["id"] == paper.id:
+                rec["title"] = paper.title
+                rec["authors"] = paper.authors
+                rec["year"] = paper.year
+                rec["journal"] = paper.journal
+                rec["doi"] = paper.doi
+                rec["pmid"] = paper.pmid
+                rec["abstract"] = paper.abstract
+                rec["pdf_path"] = paper.pdf_path
+                rec["status_id"] = paper.status_id
+                rec["priority"] = paper.priority
+                rec["notes"] = paper.notes
+                rec["date_modified"] = _now()
+                break
+        self.store.save()
 
     def delete_paper(self, paper_id: int):
         """Delete a paper by ID."""
-        self.db.execute("DELETE FROM papers WHERE id=?", (paper_id,))
-        self.db.commit()
+        self.store.papers[:] = [
+            p for p in self.store.papers if p["id"] != paper_id
+        ]
+        self.store.save()
 
     def delete_papers(self, paper_ids: list[int]):
         """Delete multiple papers by ID."""
-        placeholders = ",".join("?" for _ in paper_ids)
-        self.db.execute(
-            f"DELETE FROM papers WHERE id IN ({placeholders})", paper_ids
-        )
-        self.db.commit()
+        id_set = set(paper_ids)
+        self.store.papers[:] = [
+            p for p in self.store.papers if p["id"] not in id_set
+        ]
+        self.store.save()
 
     def get_paper(self, paper_id: int) -> Optional[Paper]:
         """Get a single paper by ID."""
-        row = self.db.execute(
-            """SELECT p.*, s.name as status_name, s.color as status_color
-               FROM papers p
-               LEFT JOIN statuses s ON p.status_id = s.id
-               WHERE p.id=?""",
-            (paper_id,),
-        ).fetchone()
-        if not row:
-            return None
-        paper = self._row_to_paper(row)
-        paper.tags = self.get_paper_tags(paper_id)
-        return paper
+        for rec in self.store.papers:
+            if rec["id"] == paper_id:
+                paper = self._record_to_paper(rec)
+                paper.tags = self.get_paper_tags(paper_id)
+                return paper
+        return None
 
     def get_all_papers(self) -> list[Paper]:
-        """Get all papers with their status info."""
-        rows = self.db.execute(
-            """SELECT p.*, s.name as status_name, s.color as status_color
-               FROM papers p
-               LEFT JOIN statuses s ON p.status_id = s.id
-               ORDER BY p.date_added DESC"""
-        ).fetchall()
+        """Get all papers, sorted by date_added descending."""
+        sorted_papers = sorted(
+            self.store.papers,
+            key=lambda p: p.get("date_added", ""),
+            reverse=True,
+        )
         papers = []
-        for row in rows:
-            paper = self._row_to_paper(row)
+        for rec in sorted_papers:
+            paper = self._record_to_paper(rec)
             paper.tags = self.get_paper_tags(paper.id)
             papers.append(paper)
         return papers
 
     def find_by_doi(self, doi: str) -> Optional[Paper]:
         """Find a paper by DOI."""
-        row = self.db.execute(
-            """SELECT p.*, s.name as status_name, s.color as status_color
-               FROM papers p
-               LEFT JOIN statuses s ON p.status_id = s.id
-               WHERE p.doi=?""",
-            (doi,),
-        ).fetchone()
-        if not row:
-            return None
-        paper = self._row_to_paper(row)
-        paper.tags = self.get_paper_tags(paper.id)
-        return paper
+        for rec in self.store.papers:
+            if rec.get("doi") == doi:
+                paper = self._record_to_paper(rec)
+                paper.tags = self.get_paper_tags(paper.id)
+                return paper
+        return None
 
     def find_by_pmid(self, pmid: str) -> Optional[Paper]:
         """Find a paper by PMID."""
-        row = self.db.execute(
-            """SELECT p.*, s.name as status_name, s.color as status_color
-               FROM papers p
-               LEFT JOIN statuses s ON p.status_id = s.id
-               WHERE p.pmid=?""",
-            (pmid,),
-        ).fetchone()
-        if not row:
-            return None
-        paper = self._row_to_paper(row)
-        paper.tags = self.get_paper_tags(paper.id)
-        return paper
+        for rec in self.store.papers:
+            if rec.get("pmid") == pmid:
+                paper = self._record_to_paper(rec)
+                paper.tags = self.get_paper_tags(paper.id)
+                return paper
+        return None
 
     def get_paper_tags(self, paper_id: int) -> list[Tag]:
         """Get all tags for a paper."""
-        rows = self.db.execute(
-            """SELECT t.id, t.name, t.color FROM tags t
-               JOIN paper_tags pt ON t.id = pt.tag_id
-               WHERE pt.paper_id=?
-               ORDER BY t.name""",
-            (paper_id,),
-        ).fetchall()
-        return [Tag(id=r["id"], name=r["name"], color=r["color"]) for r in rows]
+        for rec in self.store.papers:
+            if rec["id"] == paper_id:
+                tag_ids = rec.get("tag_ids", [])
+                tags = []
+                for t in self.store.tags:
+                    if t["id"] in tag_ids:
+                        tags.append(Tag(id=t["id"], name=t["name"], color=t["color"]))
+                tags.sort(key=lambda t: t.name)
+                return tags
+        return []
 
     def set_paper_tags(self, paper_id: int, tag_ids: list[int]):
         """Replace all tags for a paper."""
-        self.db.execute("DELETE FROM paper_tags WHERE paper_id=?", (paper_id,))
-        for tag_id in tag_ids:
-            self.db.execute(
-                "INSERT OR IGNORE INTO paper_tags (paper_id, tag_id) VALUES (?, ?)",
-                (paper_id, tag_id),
-            )
-        self.db.commit()
+        for rec in self.store.papers:
+            if rec["id"] == paper_id:
+                rec["tag_ids"] = list(tag_ids)
+                break
+        self.store.save()
 
     def add_tag_to_paper(self, paper_id: int, tag_id: int):
         """Add a single tag to a paper."""
-        self.db.execute(
-            "INSERT OR IGNORE INTO paper_tags (paper_id, tag_id) VALUES (?, ?)",
-            (paper_id, tag_id),
-        )
-        self.db.commit()
+        for rec in self.store.papers:
+            if rec["id"] == paper_id:
+                tag_ids = rec.setdefault("tag_ids", [])
+                if tag_id not in tag_ids:
+                    tag_ids.append(tag_id)
+                break
+        self.store.save()
 
     def update_paper_status(self, paper_id: int, status_id: Optional[int]):
         """Update a paper's status."""
-        self.db.execute(
-            "UPDATE papers SET status_id=?, date_modified=datetime('now') WHERE id=?",
-            (status_id, paper_id),
-        )
-        self.db.commit()
+        for rec in self.store.papers:
+            if rec["id"] == paper_id:
+                rec["status_id"] = status_id
+                rec["date_modified"] = _now()
+                break
+        self.store.save()
 
     def update_paper_priority(self, paper_id: int, priority: str):
         """Update a paper's priority."""
-        self.db.execute(
-            "UPDATE papers SET priority=?, date_modified=datetime('now') WHERE id=?",
-            (priority, paper_id),
-        )
-        self.db.commit()
+        for rec in self.store.papers:
+            if rec["id"] == paper_id:
+                rec["priority"] = priority
+                rec["date_modified"] = _now()
+                break
+        self.store.save()
 
-    def _row_to_paper(self, row) -> Paper:
-        """Convert a database row to a Paper object."""
+    def _record_to_paper(self, rec: dict) -> Paper:
+        """Convert a JSON record to a Paper object, resolving status info."""
+        status_name = ""
+        status_color = ""
+        status_id = rec.get("status_id")
+        if status_id is not None:
+            for s in self.store.statuses:
+                if s["id"] == status_id:
+                    status_name = s["name"]
+                    status_color = s["color"]
+                    break
         return Paper(
-            id=row["id"],
-            title=row["title"],
-            authors=row["authors"],
-            year=row["year"],
-            journal=row["journal"],
-            doi=row["doi"],
-            pmid=row["pmid"],
-            abstract=row["abstract"],
-            pdf_path=row["pdf_path"],
-            status_id=row["status_id"],
-            status_name=row["status_name"] or "",
-            status_color=row["status_color"] or "",
-            priority=row["priority"],
-            notes=row["notes"],
-            date_added=row["date_added"],
-            date_modified=row["date_modified"],
+            id=rec["id"],
+            title=rec.get("title", ""),
+            authors=rec.get("authors", ""),
+            year=rec.get("year"),
+            journal=rec.get("journal", ""),
+            doi=rec.get("doi"),
+            pmid=rec.get("pmid"),
+            abstract=rec.get("abstract", ""),
+            pdf_path=rec.get("pdf_path"),
+            status_id=status_id,
+            status_name=status_name,
+            status_color=status_color,
+            priority=rec.get("priority", "None"),
+            notes=rec.get("notes", ""),
+            date_added=rec.get("date_added", ""),
+            date_modified=rec.get("date_modified", ""),
         )
 
 
 class TagRepository:
     """Handles tag CRUD operations."""
 
-    def __init__(self, db: Database):
-        self.db = db
+    def __init__(self, store: JsonStore):
+        self.store = store
 
     def get_all(self) -> list[Tag]:
-        rows = self.db.execute(
-            "SELECT * FROM tags ORDER BY name"
-        ).fetchall()
-        return [Tag(id=r["id"], name=r["name"], color=r["color"]) for r in rows]
+        return sorted(
+            [Tag(id=t["id"], name=t["name"], color=t["color"]) for t in self.store.tags],
+            key=lambda t: t.name,
+        )
 
     def add(self, name: str, color: str = "#4a86c8") -> int:
-        cursor = self.db.execute(
-            "INSERT INTO tags (name, color) VALUES (?, ?)", (name, color)
-        )
-        self.db.commit()
-        return cursor.lastrowid
+        # Check uniqueness
+        for t in self.store.tags:
+            if t["name"] == name:
+                raise ValueError(f"Tag '{name}' already exists")
+        tag_id = self.store.next_tag_id()
+        self.store.tags.append({"id": tag_id, "name": name, "color": color})
+        self.store.save()
+        return tag_id
 
     def update(self, tag_id: int, name: str, color: str):
-        self.db.execute(
-            "UPDATE tags SET name=?, color=? WHERE id=?",
-            (name, color, tag_id),
-        )
-        self.db.commit()
+        for t in self.store.tags:
+            if t["id"] == tag_id:
+                t["name"] = name
+                t["color"] = color
+                break
+        self.store.save()
 
     def delete(self, tag_id: int):
-        self.db.execute("DELETE FROM tags WHERE id=?", (tag_id,))
-        self.db.commit()
+        self.store.tags[:] = [t for t in self.store.tags if t["id"] != tag_id]
+        # Also remove from all papers
+        for p in self.store.papers:
+            tag_ids = p.get("tag_ids", [])
+            if tag_id in tag_ids:
+                tag_ids.remove(tag_id)
+        self.store.save()
 
     def find_by_name(self, name: str) -> Optional[Tag]:
-        row = self.db.execute(
-            "SELECT * FROM tags WHERE name=?", (name,)
-        ).fetchone()
-        if row:
-            return Tag(id=row["id"], name=row["name"], color=row["color"])
+        for t in self.store.tags:
+            if t["name"] == name:
+                return Tag(id=t["id"], name=t["name"], color=t["color"])
         return None
 
 
 class StatusRepository:
     """Handles status CRUD operations."""
 
-    def __init__(self, db: Database):
-        self.db = db
+    def __init__(self, store: JsonStore):
+        self.store = store
 
     def get_all(self) -> list[Status]:
-        rows = self.db.execute(
-            "SELECT * FROM statuses ORDER BY sort_order"
-        ).fetchall()
-        return [
-            Status(id=r["id"], name=r["name"], color=r["color"],
-                   sort_order=r["sort_order"])
-            for r in rows
-        ]
+        return sorted(
+            [
+                Status(id=s["id"], name=s["name"], color=s["color"],
+                       sort_order=s.get("sort_order", 0))
+                for s in self.store.statuses
+            ],
+            key=lambda s: s.sort_order,
+        )
 
     def add(self, name: str, color: str = "#888888") -> int:
-        max_order = self.db.execute(
-            "SELECT COALESCE(MAX(sort_order), -1) FROM statuses"
-        ).fetchone()[0]
-        cursor = self.db.execute(
-            "INSERT INTO statuses (name, color, sort_order) VALUES (?, ?, ?)",
-            (name, color, max_order + 1),
-        )
-        self.db.commit()
-        return cursor.lastrowid
+        max_order = max((s.get("sort_order", 0) for s in self.store.statuses), default=-1)
+        status_id = self.store.next_status_id()
+        self.store.statuses.append({
+            "id": status_id,
+            "name": name,
+            "color": color,
+            "sort_order": max_order + 1,
+        })
+        self.store.save()
+        return status_id
 
     def update(self, status_id: int, name: str, color: str):
-        self.db.execute(
-            "UPDATE statuses SET name=?, color=? WHERE id=?",
-            (name, color, status_id),
-        )
-        self.db.commit()
+        for s in self.store.statuses:
+            if s["id"] == status_id:
+                s["name"] = name
+                s["color"] = color
+                break
+        self.store.save()
 
     def delete(self, status_id: int):
-        self.db.execute("DELETE FROM statuses WHERE id=?", (status_id,))
-        self.db.commit()
+        self.store.statuses[:] = [
+            s for s in self.store.statuses if s["id"] != status_id
+        ]
+        # Clear status_id on papers referencing this status
+        for p in self.store.papers:
+            if p.get("status_id") == status_id:
+                p["status_id"] = None
+        self.store.save()
