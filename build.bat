@@ -2,6 +2,10 @@
 REM Build script for Windows
 REM Run from the project root directory
 
+echo Cleaning previous build...
+if exist build rmdir /s /q build
+if exist dist rmdir /s /q dist
+
 echo Installing dependencies...
 pip install -r requirements.txt
 
