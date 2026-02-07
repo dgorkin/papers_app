@@ -2,7 +2,7 @@
 
 from PyQt6.QtCore import QModelIndex, QRect, QSize, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
-from PyQt6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem
+from PyQt6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from .paper_table_model import PRIORITY_COLORS
 
@@ -27,7 +27,7 @@ class BadgeDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Draw selection background
-        if option.state & QStyleOptionViewItem.State.State_Selected:  # type: ignore[attr-defined]
+        if option.state & QStyle.StateFlag.State_Selected:
             painter.fillRect(option.rect, option.palette.highlight())
 
         color_hex = self._color_map.get(text, "#6c7086")
@@ -87,7 +87,7 @@ class TagsDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        if option.state & QStyleOptionViewItem.State.State_Selected:  # type: ignore[attr-defined]
+        if option.state & QStyle.StateFlag.State_Selected:
             painter.fillRect(option.rect, option.palette.highlight())
 
         tags = [t.strip() for t in text.split(",") if t.strip()]
